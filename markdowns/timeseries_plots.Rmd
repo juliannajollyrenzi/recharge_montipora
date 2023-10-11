@@ -52,6 +52,8 @@ montip_change %>%
 ## All plots
 
 ```{r}
+# pdf(here("figs/Montipora_timeseriesT12.pdf"), width = 7, height = 6)
+
 montip_change %>% 
   pivot_longer(cols = c(`0`, `1`, `2`, `3`, `4`, `6`, `8`, `9`, `10`, `11`, `12`), values_to = "Percent_cover", names_to = "Time_point") %>%
   mutate(Block_Plot_Herb = paste0(Block_Plot, Herb_TRT)) %>% 
@@ -64,12 +66,14 @@ montip_change %>%
   xlab("Time point") +
   scale_color_manual(name = "Nutrients",
                      values = c(wes_palette(name = "Royal1", n = 2)))
+
+# dev.off()
 ```
 
 ## Treatment means
 
 ```{r}
-# pdf(here("figs/Montipora_meantimeseriesT12.pdf"), width = 7, height = 4)
+# pdf(here("figs/Montipora_meantimeseriesT12.pdf"), width = 7, height = 6)
 
 montip_change %>% 
   pivot_longer(cols = c(`0`, `1`, `2`, `3`, `4`, `6`, `8`, `9`, `10`, `11`, `12`), values_to = "Percent_cover", names_to = "Time_point") %>%
@@ -95,6 +99,8 @@ montip_change %>%
 # Time series of 4 main corals
 
 ```{r}
+# pdf(here("figs/FourCoral_meantimeseriesT12.pdf"), width = 7, height = 6)
+
 percHard %>%
   mutate(Block_Plot_Herb = paste0(Block_Plot, Herb_TRT)) %>% 
   mutate(Time_point = as.numeric(Time_point)) %>% 
@@ -120,7 +126,7 @@ percHard %>%
   scale_x_continuous(breaks= pretty_breaks()) +
   ylim(0, 40)
   
-
+# dev.off()
 ```
 
 
