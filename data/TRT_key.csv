@@ -1,0 +1,17 @@
+Block_Plot,Disturbance_Trt,Nutrient_Trt
+A1,Intact,Ambient
+A2,Intact,Enriched
+A3,Disturbed,Enriched
+A4,Disturbed,Ambient
+B1,Disturbed,Enriched
+B2,Disturbed,Ambient
+B3,Intact,Enriched
+B4,Intact,Ambient
+C1,Intact,Ambient
+C2,Disturbed,Ambient
+C3,Intact,Enriched
+C4,Disturbed,Enriched
+D1,Disturbed,Ambient
+D2,Intact,Ambient
+D3,Disturbed,Enriched
+D4,Intact,Enriched
