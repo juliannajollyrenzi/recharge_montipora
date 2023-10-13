@@ -19,7 +19,7 @@ Plot up some of the RECHARGE patterns through time
 # Bring in the data
 
 ```{r}
-montip_change <- read_csv(here("generated_data/RECHARGE_montipChangeT12.csv"))
+montip_change <- read_csv(here("generated_data/recharge_montipChangeT12.csv"))
 
 percHard <- read_csv(here("generated_data/recharge_comm_mat.csv"))
 ```
@@ -61,8 +61,9 @@ montip_change %>%
   ggplot(aes(x = Time_point, y = Percent_cover, group = Block_Plot_Herb, color = Nutrient_Trt)) + 
   geom_line(aes(linetype = Disturbance_Trt)) +
   facet_grid(Herb_TRT ~ Disturbance_Trt) +
-  theme_minimal() +
+  theme_classic() +
   ylab("Montipora percent cover") +
+  guides(linetype = guide_legend(title = "Disturbance")) +
   xlab("Time point") +
   scale_color_manual(name = "Nutrients",
                      values = c(wes_palette(name = "Royal1", n = 2)))
@@ -120,9 +121,9 @@ percHard %>%
   ylab("Average percent cover") +
   xlab("Time point") +
   geom_vline(xintercept = 2.5, color = "yellow") +
-  scale_color_manual(name = "Nutrients",
+  scale_color_manual(name = "Coral",
                      values = c(wes_palette(name = "GrandBudapest1", n = 4))) +
-  guides(linetype = guide_legend(title = "Disturbance")) +
+  guides(linetype = guide_legend(title = "Nutrients")) +
   scale_x_continuous(breaks= pretty_breaks()) +
   ylim(0, 40)
   

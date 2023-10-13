@@ -1,0 +1,790 @@
+---
+title: "Montipora Bayesian model"
+output: html_document
+date: "2023-10-11"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(tidyverse)
+require(here)
+# library(bayesplot)
+require(dagitty)
+library(rethinking) 
+source("functions/helperProulx.R") # from Steve Proulx
+
+
+```
+
+This script models how treatments affected montipora percent change during the duration of the nutrient addition treatment (T0-T12). See formatting script for how the data were summarized from original CoralNet annotations. Percent cover is percent cover of hard substrate (hard substrate = 100 - percent sand)
+
+# Bring in the data
+
+```{r}
+montip_change <- read_csv(here("generated_data/recharge_montipChangeT12.csv")) %>% 
+  mutate(Nutrient_Trt = as.factor(Nutrient_Trt),
+         Herb_TRT = as.factor(Herb_TRT)
+         )
+```
+
+# DAGs
+
+What do I expect given RECHARGE/general understanding? 
+
+```{r}
+montip_dag <- dagitty("dag {
+                      Nutrients -> Montipora
+                      Excavators -> Montipora
+                      Habitat -> Montipora
+                      Habitat -> Excavators
+                      Habitat -> Nutrients
+}")
+
+par(mfrow=c(1,1))
+
+drawdag(montip_dag)
+``` 
+
+![Close all backdoors](/Users/juliannarenzi/Dropbox/Documents/Montipora_corallivory/CRIOBE_data_20220116JuliannaRENZI/CRIOBE_explore/figs/Ye_old_causal_alchemy.png)
+- Have to close the backdoor (close all back door paths from exposure to the outcome)
+  **Need to have Habitat in there, then, right?**
+- Must shut variables coming into predictor variables 
+
+# ULAM simple model, no interaction
+
+## Simplify data
+
+First, need to clean up the dataframe for STAN/ulam:
+
+```{r}
+# add a numeric index for categorical variables
+montip_change %>% 
+  mutate(Nutrient_TrtCat = case_when(
+    Nutrient_Trt == "Ambient" ~ 1,
+    Nutrient_Trt == "Enriched" ~ 2,
+    TRUE ~ -9999)) %>% 
+  mutate(Herb_TRTCat = case_when(
+    Herb_TRT == "1X1" ~ 1,
+    Herb_TRT == "2X2" ~ 2,
+    Herb_TRT == "3X3" ~ 3,
+    Herb_TRT == "Open" ~ 4,
+    TRUE ~ -9999)) %>%
+  mutate(Disturbance_TrtCat = case_when(
+    Disturbance_Trt == "Intact" ~ 1,
+    Disturbance_Trt == "Disturbed" ~ 2 
+  )) %>% 
+  mutate(Block_IDCat = case_when(
+    Block == "A" ~ 1,
+    Block == "B" ~ 2,
+    Block == "C" ~ 3,
+    Block == "D" ~ 4
+  )) -> cats
+```
+
+
+```{r}
+montUlam <- list(
+  Change_Montip12Scale = (cats$Change_Montip12 - mean(cats$Change_Montip12)) / sd(cats$Change_Montip12),
+  Nutrient_Trt = (cats$Nutrient_TrtCat),
+  Herb_TRT = (cats$Herb_TRTCat),
+  Disturbance_Trt = (cats$Disturbance_TrtCat)
+)
+
+
+```
+
+
+## Create model
+
+
+```{r}
+m1 <- ulam(
+  alist(
+    Change_Montip12Scale ~ dnorm(mu, sigma),
+    mu <- a + bN[Nutrient_Trt] + bE[Herb_TRT] + bD[Disturbance_Trt],
+    a ~ dnorm(0, 0.1),
+    bN[Nutrient_Trt] ~ dnorm(0, 0.5),
+    bE[Herb_TRT] ~ dnorm(0, 0.5),
+    bD[Disturbance_Trt] ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = montUlam, chains = 4, cores = 3, iter=5000
+)
+
+```
+
+
+## Prior predictive simulation
+
+```{r}
+prior <- extract.prior(m1)  # samples of particular worlds we could live in, described by parameters taken from prior
+
+#seq_Herb <- rep(c(rep(1, 10), rep(2, 10), rep(3, 10), rep(4, 10)), 2)
+
+#seq_Nut <- c(rep(1, 40), rep(2, 40))
+
+# make unique grid and repeat a bund
+expd <- expand_grid(Herb_TRT = c(1, 2, 3, 4),
+            Nutrient_Trt = c(1, 2),
+            Disturbance_Trt = c(1, 2))
+
+rbind(expd, expd, expd, expd, expd, expd, expd, expd) -> expdN
+
+
+samples_prior <- link(m1,
+                      data = list(Herb_TRT = expdN$Herb_TRT,
+                                  Nutrient_Trt = expdN$Nutrient_Trt,
+                                  Disturbance_Trt = expdN$Disturbance_Trt), 
+                      post = prior)  # link_df is from helper.R--not working with ulam
+
+
+```
+
+How do we change the output to be easily usable like link_df?
+
+```{r}
+# I think we need to transpose first?
+as_tibble(t(samples_prior)) %>% 
+  mutate(Herb_TRT = expdN$Herb_TRT,
+         Nutrient_Trt = expdN$Nutrient_Trt, 
+         Disturbance_Trt = expdN$Disturbance_Trt) -> prior.wide
+
+# pivot longer?
+prior.wide %>% 
+  pivot_longer(cols = colnames(prior.wide)[str_detect(colnames(prior.wide),
+                                 pattern = "V")],
+               values_to = "Montip_change_std",
+               names_to = "Sim_number") -> prior.long
+```
+
+
+Then plot
+
+```{r}
+# plot
+prior.long %>% 
+  ggplot(aes(x = as.factor(Herb_TRT), y = Montip_change_std, color = as.factor(Nutrient_Trt))) +
+  geom_boxplot(alpha = .05) +
+  xlab("Fish treatment") +
+  ylab("Change in Montipora cover (%)") +
+  facet_wrap(~Disturbance_Trt) +
+  theme_bw()
+```
+
+I think this is okay because the change in Montipora proportion hardcover is rarely above 2--that seems reasonable?
+
+## Examine results
+
+```{r}
+precis(m1, depth = 2, prob=0.95) # okay on this wide CI  there's a negative relationship between excavators and Montip and more Montipora at the highest nutrient levels
+
+traceplot(m1)
+```
+
+### Parameter estimates
+
+Calculate the indexes for the effect of the two nutrient levels and visualize the distribution
+
+```{r}
+post.m1 <- extract.samples(m1) %>% 
+  as.data.frame() %>% 
+  as_tibble() 
+
+
+post.m1 %>% 
+  mutate(DiffN = bN.2-bN.1) %>% 
+  ggplot(aes(x = bN.2)) +
+  geom_density(fill = "darkblue", alpha = 0.5) +
+  #geom_density(aes(x = bN.2), fill = "blue", alpha = 0.5) +
+  geom_density(aes(x = bN.1), fill = "lightblue", alpha = 0.5) +
+  geom_density(aes(x = DiffN), fill = "gray", alpha = 0.5) +
+  xlab("Nutrient parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+```
+
+For herbivory
+
+```{r}
+post.m1 %>% 
+  ggplot(aes(x = bE.4)) +
+  geom_density(fill = "darkgreen", alpha = 0.5) +
+  geom_density(aes(x = bE.3), fill = "green", alpha = 0.5) +
+  geom_density(aes(x = bE.2), fill = "lightgreen", alpha = 0.5) +
+  geom_density(aes(x = bE.1), fill = "gray", alpha = 0.5) +
+  xlab("Fish parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+```
+
+And for disturbance
+
+```{r}
+post.m1 %>% 
+  mutate(DiffD = bD.2-bD.1) %>% 
+  ggplot(aes(x = bD.2)) +
+  geom_density(fill = "tomato3", alpha = 0.5) +
+  geom_density(aes(x = bD.1), fill = "tomato1", alpha = 0.5) +
+  geom_density(aes(x = DiffD), fill = "gray", alpha = 0.5) +
+  xlab("Disturbance parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+``` 
+
+#### Contrasts
+
+Since we're using indices, we're interested in how different the estimates are from each other as well as whether they're different from zero. See page 156 of Statistical Rethinking for explanation if confused.
+
+```{r}
+# nutrients
+post.m1$diffNut <- post.m1$bN.2 - post.m1$bN.1
+
+# herbivores
+post.m1$diffHerb4.1 <- post.m1$bE.4 - post.m1$bE.1
+post.m1$diffHerb3.1 <- post.m1$bE.3 - post.m1$bE.1
+post.m1$diffHerb2.1 <- post.m1$bE.2 - post.m1$bE.1
+
+post.m1$diffHerb4.3 <- post.m1$bE.4 - post.m1$bE.3
+post.m1$diffHerb4.2 <- post.m1$bE.4 - post.m1$bE.2
+
+post.m1$diffHerb3.2 <- post.m1$bE.3 - post.m1$bE.2
+
+# disturbance
+post.m1$diffDist <- post.m1$bD.2 - post.m1$bD.1
+
+
+```
+
+Look at distributions and 95% CI's
+
+```{r}
+precis(post.m1, depth = 2, prob=0.95)
+
+plot(precis(post.m1, depth = 2, prob=0.95))
+```
+
+
+
+## Posterior prediction check
+
+```{r}
+# call link without specifying new data so it uses original data
+mu <- link(m1)
+
+# summarize samples across cases
+mu_mean <- apply(mu, 2, mean)
+mu_PI <- apply(mu, 2, PI) # PI is the percentile interval using samples from a posterior density or simulated outcomes
+
+# simulate observations (no new data again so uses original data)
+Montip_sim <- sim(m1, n = 1e4)
+Montip_PI <- apply(D_sim, 2, PI) # what's this??
+
+```
+
+Plot
+
+```{r}
+par(mfrow = c(1,1))
+
+plot(mu_mean ~ montUlam$Change_Montip12Scale,
+     col = rangi2,
+     ylim = range(mu_PI),
+     xlab = "Observed Montip cover",
+     ylab = "Predicted Montip cover")
+abline(a = 0,
+       b = 1,
+       lty = 2)
+
+for( i in 1:nrow(as.data.frame(montUlam))) lines(rep(montUlam$Change_Montip12Scale[i], 2), 
+                                     mu_PI[,i],
+                                     col = rangi2)
+```
+
+# ULAM model with random effect, no interactions
+
+Want a random effect for the block. Make an essential list that includes random effect
+
+```{r}
+montUlamR <- list(
+  Change_Montip12Scale = (cats$Change_Montip12 - mean(cats$Change_Montip12)) / sd(cats$Change_Montip12),
+  Nutrient_Trt = (cats$Nutrient_TrtCat),
+  Herb_Trt = (cats$Herb_TRTCat),
+  Disturbance_Trt = (cats$Disturbance_TrtCat),
+  Block = (cats$Block_IDCat)
+)
+```
+
+
+```{r}
+m1R <- ulam(
+  alist(
+    Change_Montip12Scale ~ dnorm(mu, sigma),
+    mu <- a[Block] + bN[Nutrient_Trt] + bE[Herb_Trt] + bD[Disturbance_Trt],
+    # priors
+    a[Block] ~ dnorm(a_bar, sig2),
+    bN[Nutrient_Trt] ~ dnorm(0, 0.5),
+    bE[Herb_Trt] ~ dnorm(0, 0.5),
+    bD[Disturbance_Trt] ~ dnorm(0, 0.5),
+    #bB[Block] ~ dnorm(a_bar, sig2),  # adaptive prior with hyperparameters
+    sigma ~ dexp(1),
+    
+    # hyper priors
+    a_bar ~ dnorm(0, 1), # is this the right way to do it? This should be the prior for average block
+    sig2 ~ dhalfnorm(0, 1) # this is the prior for the standard deviation of blocks
+    # got this dhalfnorm idea from page 407-408, which says when you have few points (e.g., in our case) to estimate each cluster you might need a more informative prior and that this is one option for it
+      
+    
+  ), data = montUlamR, chains = 4, cores = 3, iter = 50000
+)
+
+# Note: seems like a bunch of chains are ending in divergence? Why is that?
+
+```
+
+## Prior predictive simulation
+
+```{r}
+prior <- extract.prior(m1R)  # samples of particular worlds we could live in, described by parameters taken from prior
+
+# make unique grid and repeat a bund
+expd <- expand_grid(Herb_Trt = c(1, 2, 3, 4),
+            Nutrient_Trt = c(1, 2),
+            Disturbance_Trt = c(1, 2),
+            Block = c(1, 2, 3, 4))
+
+rbind(expd, expd, expd, expd, expd, expd, expd, expd) -> expdN
+
+
+samples_prior <- link(m1R,
+                      data = list(Herb_Trt = expdN$Herb_Trt,
+                                  Nutrient_Trt = expdN$Nutrient_Trt,
+                                  Disturbance_Trt = expdN$Disturbance_Trt,
+                                  Block = expdN$Block), 
+                      post = prior)  # link_df is from helper.R--not working with ulam
+
+
+```
+
+How do we change the output to be easily usable like link_df?
+
+```{r}
+# I think we need to transpose first?
+as_tibble(t(samples_prior)) %>% 
+  mutate(Herb_Trt = expdN$Herb_Trt,
+         Nutrient_Trt = expdN$Nutrient_Trt, 
+         Disturbance_Trt = expdN$Disturbance_Trt,
+         Block = expdN$Block) -> prior.wide
+
+# pivot longer?
+prior.wide %>% 
+  pivot_longer(cols = colnames(prior.wide)[str_detect(colnames(prior.wide),
+                                 pattern = "V")],
+               values_to = "Montip_change_std",
+               names_to = "Sim_number") -> prior.long
+```
+
+
+Then plot
+
+```{r}
+# plot
+prior.long %>% 
+  ggplot(aes(x = as.factor(Herb_Trt), y = Montip_change_std, color = as.factor(Nutrient_Trt))) +
+  geom_boxplot(alpha = .05) +
+  xlab("Fish treatment") +
+  ylab("Change in Montipora cover (standardized)") +
+  facet_grid(Disturbance_Trt ~ Block) +
+  theme_bw()
+```
+
+The initial simulation with a_bar ~ dnorm(0, 0.5) seemed to create some pretty extreme answers (e.g., change in MOntipora of -15 std units)? Trying to tighten it up with a smaller a_bar. Trying dnorm(0, 0.2) next
+
+## Examine results
+
+```{r}
+precis(m1R, depth = 2, prob=0.95) # okay on this wide CI  there's a negative relationship between excavators and Montip and more Montipora at the highest nutrient levels
+
+plot(precis(m1R, depth = 2, prob=0.95))
+
+traceplot(m1R)
+```
+
+### Parameter estimates
+
+Calculate the indexes for the effect of the two nutrient levels and visualize the distribution
+
+```{r}
+post.m1R <- extract.samples(m1R) %>% 
+  as.data.frame() %>% 
+  as_tibble() 
+
+
+post.m1R %>% 
+  mutate(DiffN = bN.2-bN.1) %>% 
+  ggplot(aes(x = bN.2)) +
+  geom_density(fill = "darkblue", alpha = 0.5) +
+  #geom_density(aes(x = bN.2), fill = "blue", alpha = 0.5) +
+  geom_density(aes(x = bN.1), fill = "lightblue", alpha = 0.5) +
+  geom_density(aes(x = DiffN), fill = "gray", alpha = 0.5) +
+  xlab("Nutrient parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+```
+
+For herbivory
+
+```{r}
+post.m1R %>% 
+  ggplot(aes(x = bE.4)) +
+  geom_density(fill = "darkgreen", alpha = 0.5) +
+  geom_density(aes(x = bE.3), fill = "green", alpha = 0.5) +
+  geom_density(aes(x = bE.2), fill = "lightgreen", alpha = 0.5) +
+  geom_density(aes(x = bE.1), fill = "turquoise", alpha = 0.5) +
+  xlab("Fish parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+```
+
+And for disturbance
+
+```{r}
+post.m1R %>% 
+  mutate(DiffD = bD.2-bD.1) %>% 
+  ggplot(aes(x = bD.2)) +
+  geom_density(fill = "tomato3", alpha = 0.5) +
+  geom_density(aes(x = bD.1), fill = "tomato1", alpha = 0.5) +
+  geom_density(aes(x = DiffD), fill = "gray", alpha = 0.5) +
+  xlab("Disturbance parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+``` 
+
+#### Contrasts
+
+Since we're using indices, we're interested in how different the estimates are from each other as well as whether they're different from zero
+
+```{r}
+# nutrients
+post.m1R$diffNut <- post.m1R$bN.2 - post.m1R$bN.1
+
+# herbivores
+post.m1R$diffHerb4.1 <- post.m1R$bE.4 - post.m1R$bE.1
+post.m1R$diffHerb3.1 <- post.m1R$bE.3 - post.m1R$bE.1
+post.m1R$diffHerb2.1 <- post.m1R$bE.2 - post.m1R$bE.1
+
+post.m1R$diffHerb4.3 <- post.m1R$bE.4 - post.m1R$bE.3
+post.m1R$diffHerb4.2 <- post.m1R$bE.4 - post.m1R$bE.2
+
+post.m1R$diffHerb3.2 <- post.m1R$bE.3 - post.m1R$bE.2
+
+# disturbance
+post.m1R$diffDist <- post.m1R$bD.2 - post.m1R$bD.1
+
+
+```
+
+Look at distributions and 95% CI's
+
+```{r}
+precis(post.m1R, depth = 2, prob=0.95)
+
+par(mfrow=c(1,1))
+plot(precis(post.m1R, depth = 2, prob=0.95))
+```
+
+
+
+## Posterior prediction check
+
+```{r}
+# call link without specifying new data so it uses original data
+mu <- link(m1R)
+
+# summarize samples across cases
+mu_mean <- apply(mu, 2, mean)
+mu_PI <- apply(mu, 2, PI) # PI is the percentile interval using samples from a posterior density or simulated outcomes
+
+# simulate observations (no new data again so uses original data)
+Montip_sim <- sim(m1R, n = 1e4)
+Montip_PI <- apply(D_sim, 2, PI) # what's this??
+
+```
+
+Plot
+
+```{r}
+par(mfrow = c(1,1))
+
+plot(mu_mean ~ montUlamR$Change_Montip12Scale,
+     col = rangi2,
+     ylim = range(mu_PI),
+     xlab = "Observed Montip cover",
+     ylab = "Predicted Montip cover")
+abline(a = 0,
+       b = 1,
+       lty = 2)
+
+for( i in 1:nrow(as.data.frame(montUlamR))) lines(rep(montUlamR$Change_Montip12Scale[i], 2), 
+                                     mu_PI[,i],
+                                     col = rangi2)
+```
+
+## Compare
+
+```{r}
+rethinking::compare(m1, m1R)
+```
+
+# ULAM Interaction model, no random effect
+
+Make an essential list that includes necessary variables
+
+```{r}
+montUlamInt <- list(
+  Change_Montip12Scale = (cats$Change_Montip12 - mean(cats$Change_Montip12)) / sd(cats$Change_Montip12),
+  Nutrient_Trt = (cats$Nutrient_TrtCat),
+  Herb_Trt = (cats$Herb_TRTCat),
+  Disturbance_Trt = (cats$Disturbance_TrtCat)
+)
+```
+
+
+```{r}
+m1Int <- ulam(
+  alist(
+    Change_Montip12Scale ~ dnorm(mu, sigma),
+    mu <- a + bN[Nutrient_Trt] + bE[Herb_Trt] + bD[Disturbance_Trt] + bNE[Nutrient_Trt][Herb_Trt],
+    # priors
+    a ~ dnorm(0, 0.1),
+    bN[Nutrient_Trt] ~ dnorm(0, 0.5),
+    bE[Herb_Trt] ~ dnorm(0, 0.5),
+    bD[Disturbance_Trt] ~ dnorm(0, 0.5),
+    bNE[Nutrient_Trt][Herb_Trt] ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+      
+    
+  ), data = montUlamInt, chains = 4, cores = 3, iter = 50000
+)
+
+# Note: seems like a bunch of chains are ending in divergence? Why is that?
+
+```
+
+## Prior predictive simulation
+
+```{r}
+prior <- extract.prior(m1R)  # samples of particular worlds we could live in, described by parameters taken from prior
+
+# make unique grid and repeat a bund
+expd <- expand_grid(Herb_Trt = c(1, 2, 3, 4),
+            Nutrient_Trt = c(1, 2),
+            Disturbance_Trt = c(1, 2),
+            Block = c(1, 2, 3, 4))
+
+rbind(expd, expd, expd, expd, expd, expd, expd, expd) -> expdN
+
+
+samples_prior <- link(m1R,
+                      data = list(Herb_Trt = expdN$Herb_Trt,
+                                  Nutrient_Trt = expdN$Nutrient_Trt,
+                                  Disturbance_Trt = expdN$Disturbance_Trt,
+                                  Block = expdN$Block), 
+                      post = prior)  # link_df is from helper.R--not working with ulam
+
+
+```
+
+How do we change the output to be easily usable like link_df?
+
+```{r}
+# I think we need to transpose first?
+as_tibble(t(samples_prior)) %>% 
+  mutate(Herb_Trt = expdN$Herb_Trt,
+         Nutrient_Trt = expdN$Nutrient_Trt, 
+         Disturbance_Trt = expdN$Disturbance_Trt,
+         Block = expdN$Block) -> prior.wide
+
+# pivot longer?
+prior.wide %>% 
+  pivot_longer(cols = colnames(prior.wide)[str_detect(colnames(prior.wide),
+                                 pattern = "V")],
+               values_to = "Montip_change_std",
+               names_to = "Sim_number") -> prior.long
+```
+
+
+Then plot
+
+```{r}
+# plot
+prior.long %>% 
+  ggplot(aes(x = as.factor(Herb_Trt), y = Montip_change_std, color = as.factor(Nutrient_Trt))) +
+  geom_boxplot(alpha = .05) +
+  xlab("Fish treatment") +
+  ylab("Change in Montipora cover (standardized)") +
+  facet_grid(Disturbance_Trt ~ Block) +
+  theme_bw()
+```
+
+The initial simulation with a_bar ~ dnorm(0, 0.5) seemed to create some pretty extreme answers (e.g., change in MOntipora of -15 std units)? Trying to tighten it up with a smaller a_bar. Trying dnorm(0, 0.2) next
+
+## Examine results
+
+```{r}
+precis(m1R, depth = 2, prob=0.95) # okay on this wide CI  there's a negative relationship between excavators and Montip and more Montipora at the highest nutrient levels
+
+plot(precis(m1R, depth = 2, prob=0.95))
+
+traceplot(m1R)
+```
+
+### Parameter estimates
+
+Calculate the indexes for the effect of the two nutrient levels and visualize the distribution
+
+```{r}
+post.m1R <- extract.samples(m1R) %>% 
+  as.data.frame() %>% 
+  as_tibble() 
+
+
+post.m1R %>% 
+  mutate(DiffN = bN.2-bN.1) %>% 
+  ggplot(aes(x = bN.2)) +
+  geom_density(fill = "darkblue", alpha = 0.5) +
+  #geom_density(aes(x = bN.2), fill = "blue", alpha = 0.5) +
+  geom_density(aes(x = bN.1), fill = "lightblue", alpha = 0.5) +
+  geom_density(aes(x = DiffN), fill = "gray", alpha = 0.5) +
+  xlab("Nutrient parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+```
+
+For herbivory
+
+```{r}
+post.m1R %>% 
+  ggplot(aes(x = bE.4)) +
+  geom_density(fill = "darkgreen", alpha = 0.5) +
+  geom_density(aes(x = bE.3), fill = "green", alpha = 0.5) +
+  geom_density(aes(x = bE.2), fill = "lightgreen", alpha = 0.5) +
+  geom_density(aes(x = bE.1), fill = "turquoise", alpha = 0.5) +
+  xlab("Fish parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+```
+
+And for disturbance
+
+```{r}
+post.m1R %>% 
+  mutate(DiffD = bD.2-bD.1) %>% 
+  ggplot(aes(x = bD.2)) +
+  geom_density(fill = "tomato3", alpha = 0.5) +
+  geom_density(aes(x = bD.1), fill = "tomato1", alpha = 0.5) +
+  geom_density(aes(x = DiffD), fill = "gray", alpha = 0.5) +
+  xlab("Disturbance parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_bw()
+``` 
+
+#### Contrasts
+
+Since we're using indices, we're interested in how different the estimates are from each other as well as whether they're different from zero
+
+```{r}
+# nutrients
+post.m1R$diffNut <- post.m1R$bN.2 - post.m1R$bN.1
+
+# herbivores
+post.m1R$diffHerb4.1 <- post.m1R$bE.4 - post.m1R$bE.1
+post.m1R$diffHerb3.1 <- post.m1R$bE.3 - post.m1R$bE.1
+post.m1R$diffHerb2.1 <- post.m1R$bE.2 - post.m1R$bE.1
+
+post.m1R$diffHerb4.3 <- post.m1R$bE.4 - post.m1R$bE.3
+post.m1R$diffHerb4.2 <- post.m1R$bE.4 - post.m1R$bE.2
+
+post.m1R$diffHerb3.2 <- post.m1R$bE.3 - post.m1R$bE.2
+
+# disturbance
+post.m1R$diffDist <- post.m1R$bD.2 - post.m1R$bD.1
+
+
+```
+
+Look at distributions and 95% CI's
+
+```{r}
+precis(post.m1R, depth = 2, prob=0.95)
+
+par(mfrow=c(1,1))
+plot(precis(post.m1R, depth = 2, prob=0.95))
+```
+
+
+
+## Posterior prediction check
+
+```{r}
+# call link without specifying new data so it uses original data
+mu <- link(m1R)
+
+# summarize samples across cases
+mu_mean <- apply(mu, 2, mean)
+mu_PI <- apply(mu, 2, PI) # PI is the percentile interval using samples from a posterior density or simulated outcomes
+
+# simulate observations (no new data again so uses original data)
+Montip_sim <- sim(m1R, n = 1e4)
+Montip_PI <- apply(D_sim, 2, PI) # what's this??
+
+```
+
+Plot
+
+```{r}
+par(mfrow = c(1,1))
+
+plot(mu_mean ~ montUlamR$Change_Montip12Scale,
+     col = rangi2,
+     ylim = range(mu_PI),
+     xlab = "Observed Montip cover",
+     ylab = "Predicted Montip cover")
+abline(a = 0,
+       b = 1,
+       lty = 2)
+
+for( i in 1:nrow(as.data.frame(montUlamR))) lines(rep(montUlamR$Change_Montip12Scale[i], 2), 
+                                     mu_PI[,i],
+                                     col = rangi2)
+```
+
+## Compare
+
+```{r}
+rethinking::compare(m1, m1R)
+```
+# Questions:
+
+- Leaving observations at the transect level--correlations on the transect are interesting? But what is the random effect and is this not really honest?
+- INTERACTIONS FOR TWO FACTORS?
+- Compare function?
+- ARE MY PRIORS BAD?? This is a toughie for me; maybe review book
+- Is that the right method for calculating contrasts? extract.samples has the same values for parameters in a given sample, right?
+  *How to calculate "significance"/confidence for contrasts?
+- Random effect of Block didn't seem to change model paramters at all? Is that right?
+- Predictive stuff + interactions
+- Problem with Dim thing
+- For random model, did it make sense to shrink variation on hyper prior a_bar to deal with large estimates?
+  * Still having ~5 std changes seems kind of extreme? But also don't want it to be too constrained because there are strong block effects?
+- What to do about divergence warnings? e.g., :
+
+**Warning: 3 of 1000 (0.0%) transitions ended with a divergence** See https://mc-stan.org/misc/warnings for details**
+
+  *Do more warmup with a higher target acceptance rate? I guess that's stan's "adapt_delta"? How do I change that? What are good values?
+  *Or, reparameterization? Not sure how to do this exactly
+  
+- Maybe can't really estimate random effects if only have so few observations?
+- dexp(1) --- does that mean the "quantile" is 1?
+
