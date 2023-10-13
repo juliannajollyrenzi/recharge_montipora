@@ -15,6 +15,8 @@ require(here)
 require(dagitty)
 library(rethinking) 
 source("functions/helperProulx.R") # from Steve Proulx
+require(patchwork)
+library(RColorBrewer)
 
 
 ```
@@ -192,46 +194,95 @@ post.m1 <- extract.samples(m1) %>%
   as.data.frame() %>% 
   as_tibble() 
 
+```
+
+Plot for nutrients
+
+```{r}
+# pdf(here("figs/SimpleMod_NutDensity.pdf"), width = 6, height = 3.5)
 
 post.m1 %>% 
   mutate(DiffN = bN.2-bN.1) %>% 
-  ggplot(aes(x = bN.2)) +
-  geom_density(fill = "darkblue", alpha = 0.5) +
-  #geom_density(aes(x = bN.2), fill = "blue", alpha = 0.5) +
-  geom_density(aes(x = bN.1), fill = "lightblue", alpha = 0.5) +
-  geom_density(aes(x = DiffN), fill = "gray", alpha = 0.5) +
+  select(bN.1, bN.2, DiffN) %>% 
+  rename("Ambient" = "bN.1",
+         "Enriched" = "bN.2",
+         "Amb-Enr" = "DiffN") %>% 
+  pivot_longer(cols = c("Ambient", "Enriched", "Amb-Enr"), names_to = "Treatment", values_to = "Estimate") %>% 
+  ggplot(aes(x = Estimate, fill = Treatment)) +
+  geom_density(alpha = 0.5) +
+  # this is kind of complicated code just to keep the nutrient/enriched colors the same
+  scale_fill_manual(values = c(wes_palette(name = "Royal1", n = 3)[3], wes_palette(name = "Royal1", n = 3)[1], wes_palette(name = "Royal1", n = 3)[2])) +
+  ylab("Density") +
   xlab("Nutrient parameter value") + 
   geom_vline(xintercept = 0, linetype = "dashed") +
-  theme_bw()
+  theme_bw() 
+
+# dev.off()
 ```
 
-For herbivory
+Or do it without contrast, since it'll be too crazy on the herbivory one
 
 ```{r}
 post.m1 %>% 
-  ggplot(aes(x = bE.4)) +
-  geom_density(fill = "darkgreen", alpha = 0.5) +
-  geom_density(aes(x = bE.3), fill = "green", alpha = 0.5) +
-  geom_density(aes(x = bE.2), fill = "lightgreen", alpha = 0.5) +
-  geom_density(aes(x = bE.1), fill = "gray", alpha = 0.5) +
+  select(bN.1, bN.2) %>% 
+  rename("Ambient" = "bN.1",
+         "Enriched" = "bN.2") %>% 
+  pivot_longer(cols = c("Ambient", "Enriched"), names_to = "Treatment", values_to = "Estimate") %>% 
+  ggplot(aes(x = Estimate, fill = Treatment)) +
+  geom_density(alpha = 0.5) +
+  # this is kind of complicated code just to keep the nutrient/enriched colors the same
+  scale_fill_manual(values = c(wes_palette(name = "Royal1", n = 2))) +
+  ylab("Density") +
+  xlab("Nutrient parameter value") + 
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  ylim(0, 2) +
+  theme_bw() -> nutplotM1
+
+
+```
+
+
+Plot for herbivory
+
+```{r}
+# slightly cleaner way than before
+post.m1 %>% 
+  select(bE.1, bE.2, bE.3, bE.4) %>% 
+  rename("1x1" = "bE.1",
+         "2x2" = "bE.2",
+         "3x3" = "bE.3",
+         "Open" = "bE.4") %>% 
+  pivot_longer(cols = c("1x1", "2x2", "3x3", "Open"), names_to = "Treatment", values_to = "Estimate") %>% 
+  ggplot(aes(x = Estimate, fill = Treatment)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_brewer(palette="YlGnBu", direction=-1) +
+  ylab("Density") +
   xlab("Fish parameter value") + 
   geom_vline(xintercept = 0, linetype = "dashed") +
-  theme_bw()
+  ylim(0, 2) +
+  theme_bw() -> fishplotM1 
 ```
 
 And for disturbance
 
 ```{r}
 post.m1 %>% 
-  mutate(DiffD = bD.2-bD.1) %>% 
-  ggplot(aes(x = bD.2)) +
-  geom_density(fill = "tomato3", alpha = 0.5) +
-  geom_density(aes(x = bD.1), fill = "tomato1", alpha = 0.5) +
-  geom_density(aes(x = DiffD), fill = "gray", alpha = 0.5) +
-  xlab("Disturbance parameter value") + 
+  select(bD.1, bD.2) %>% 
+  rename("Intact" = "bD.1",
+         "Cyclone" = "bD.2") %>% 
+  pivot_longer(cols = c("Intact", "Cyclone"), names_to = "Treatment", values_to = "Estimate") %>% 
+  ggplot(aes(x = Estimate, fill = Treatment)) +
+  geom_density(alpha = 0.5) +
+  # this is kind of complicated code just to keep the nutrient/enriched colors the same
+  scale_fill_manual(values = c("orange", "yellow")) +
+  ylab("Density") +
+  xlab("Cyclone parameter value") + 
   geom_vline(xintercept = 0, linetype = "dashed") +
-  theme_bw()
+  ylim(0, 2) +
+  theme_bw() -> cyclplotM1
 ``` 
+
+
 
 #### Contrasts
 
@@ -263,6 +314,83 @@ Look at distributions and 95% CI's
 precis(post.m1, depth = 2, prob=0.95)
 
 plot(precis(post.m1, depth = 2, prob=0.95))
+```
+
+#### Plot in a nicer way
+
+```{r}
+# get 95% CI interval info
+precis(post.m1, depth = 2, prob=0.95) %>% 
+  as.data.frame() %>% 
+  as.tibble() %>% 
+  mutate(Contrast = rownames(precis(post.m1, depth = 2, prob=0.95))) %>% 
+  mutate(Contrast = case_when(Contrast == "diffNut" ~ "Nutrient",
+                              Contrast == "diffHerb4.1" ~ "4x4-1x1",
+                              Contrast == "diffHerb3.1" ~ "3x3-1x1",
+                              Contrast == "diffHerb2.1" ~ "2x2-1x1",
+                              Contrast == "diffHerb4.3" ~ "4x4-3x3",
+                              Contrast == "diffHerb4.2" ~ "4x4-2x2",
+                              Contrast == "diffHerb3.2" ~ "3x3-2x2",
+                              Contrast == "diffDist" ~ "Cyclone",
+                              TRUE ~ "NotPlotting")) %>% 
+  # put them in descending order manually 
+  mutate(Contrast = factor(Contrast, 
+                              levels = c("Cyclone", "Nutrient", "4x4-3x3", "2x2-1x1", "3x3-2x2", "4x4-2x2", "3x3-1x1", "4x4-1x1", "NotPlotting"))) %>% 
+  filter(Contrast != "NotPlotting") -> m195p 
+
+
+# get 90% CI info
+precis(post.m1, depth = 2, prob=0.90) %>% 
+  as.data.frame() %>% 
+  as.tibble() %>% 
+  mutate(Contrast = rownames(precis(post.m1, depth = 2, prob=0.90))) %>% 
+  mutate(Contrast = case_when(Contrast == "diffNut" ~ "Nutrient",
+                              Contrast == "diffHerb4.1" ~ "4x4-1x1",
+                              Contrast == "diffHerb3.1" ~ "3x3-1x1",
+                              Contrast == "diffHerb2.1" ~ "2x2-1x1",
+                              Contrast == "diffHerb4.3" ~ "4x4-3x3",
+                              Contrast == "diffHerb4.2" ~ "4x4-2x2",
+                              Contrast == "diffHerb3.2" ~ "3x3-2x2",
+                              Contrast == "diffDist" ~ "Cyclone",
+                              TRUE ~ "NotPlotting")) %>% 
+  # put them in descending order manually 
+  mutate(Contrast = factor(Contrast, 
+                              levels = c("Cyclone", "Nutrient", "4x4-3x3", "2x2-1x1", "3x3-2x2", "4x4-2x2", "3x3-1x1", "4x4-1x1", "NotPlotting"))) %>% 
+  filter(Contrast != "NotPlotting") -> m190p 
+```
+
+Plot 
+
+```{r}
+m195p %>% 
+  full_join(m190p) %>% 
+  mutate(Significance = case_when(sign(`2.5%`) == sign(`97.5%`) ~ "95%", 
+                           sign(`5%`) == sign(`95%`) ~ "90%", 
+                           TRUE ~ "None")) %>% 
+  ggplot(aes(x = Contrast, y = mean, color = Significance)) +
+  geom_point(size = 3, color = "black") +
+  geom_linerange(aes(ymin = `2.5%`, ymax = `97.5%`), alpha = 0.5, size = 2) +
+  geom_linerange(aes(ymin = `5%`, ymax = `95%`), color = "black", alpha = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  scale_color_manual(values = c("tomato", "cornflowerblue", "gray")) +
+  ylab("Posterior coefficient estimate") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) -> contplotM1
+```
+
+
+
+
+### Plot together
+
+Using the package patchwork
+
+```{r}
+# pdf(here("figs/SimpleMod_PostDensities.pdf"), width = 10, height = 6)
+
+(nutplotM1 + fishplotM1) / (cyclplotM1 + contplotM1) + plot_annotation(tag_levels = 'A') 
+
+# dev.off()
 ```
 
 
