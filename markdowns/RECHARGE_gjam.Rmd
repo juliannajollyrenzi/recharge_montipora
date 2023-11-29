@@ -2,10 +2,152 @@
 title: "RECHARGE GJAM style"
 output: html_document
 date: "2023-11-29"
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+require(tidyverse)
+require(here)
 ```
 
 Format RECHARGE data for GJAM analysis for kicks
+
+# Bring in the raw data
+
+Downloaded these annotations directly from CoralNet, where there were files through T14 (not sure if they're annotated).
+
+```{r}
+# Annotations as downloaded off of CoranNet on Oct 3, 2023
+oct3anno <- read_csv(here("data/annotations_2023Oct3_CoralNet.csv")) %>% 
+  filter(Time_point != 99) %>% 
+  select(-Date)
+
+# we'll also bring in a key for dealing with many of the categories on coralnet (this is all from Tom's awesome code)
+key <- read_csv(here("data/annotation_key_feb2023.csv")) %>% 
+  mutate(Label = Taxa)
+
+# and a metadata file for identifying plot treatments
+trt_key <- read_csv(here("data/TRT_key.csv"))
+```
+
+# Clean up the data
+
+Need to make the CoralNet files all uniform
+
+```{r}
+oct3anno %>% 
+  # standardize these names
+  mutate(
+    Herb_TRT = case_when(
+      Herb_TRT == "1x1" ~ "1X1",
+      Herb_TRT == "3x3" ~ "3X3",
+      Herb_TRT == "open" ~ "Open",
+      TRUE ~ Herb_TRT
+    )) %>% 
+  # add column for block plot and herb information
+  mutate(Block_Plot = str_c(Block, Plot, sep = ""),
+         Block_Plot_Herb_TRT = str_c(Block_Plot, Herb_TRT, sep = "_"),
+         Count = 1) -> annots
+```
+
+Use the annotation key to get coarser taxa designations
+
+```{r}
+# then join the key with the annotation and treatement data
+annots %>% 
+  full_join(key, by = "Label") %>% 
+  full_join(trt_key) -> recharge
+
+```
+
+Look to see what did not get labeled:
+
+```{r}
+recharge %>% filter(is.na(Taxa)) # something called Dic_ver (will need to ask about this if we move forward with this analysis)
+```
+
+# Summarize at the plot level
+
+```{r}
+recharge %>% 
+  group_by(Time_point, Block, Plot, Block_Plot, Herb_TRT, Taxa2, Nutrient_Trt, Disturbance_Trt) %>% 
+  # get count of each taxa per plot
+  summarize(Count = sum(Count)) %>% 
+  # pivot wider so each taxa gets a column
+  pivot_wider(names_from = Taxa2, values_from = Count) %>% 
+  # replace NA values in the matrix with 0
+  replace(is.na(.), 0) %>% 
+  # get rid of points that are out
+  select(-OUT)  %>% 
+  ungroup() %>% 
+  select(-`NA`) -> plots
+  
+```
+
+Get percent cover for each taxa group
+
+```{r}
+# first column we want
+startcol <- grep("Acanthastrea_spp", colnames(plots))
+
+# last column we want
+endcol <- grep("Cladophoropsis", colnames(plots))
+
+# calculate the total cover
+sum_cover <- cbind(plots, Plot_sum = rowSums(plots[, startcol:endcol])) # looks about right--over 200 valid (not NA or out) points per plot
+
+# and percent of hard cover
+perc_cover <- (sum_cover[,startcol:endcol]/(sum_cover$Plot_sum-sum_cover$Sand)) * 100
+
+# then combine columns again for the full dataset
+percHard <- cbind(plots[1:(startcol-1)], perc_cover) 
+```
+
+
+# Calculate changes
+
+```{r}
+percHard %>% 
+  # the columns we might want to use in the model
+  select(Time_point, Block, Plot, Block_Plot, Herb_TRT, Nutrient_Trt, Disturbance_Trt, Acropora_spp, Montipora_spp, Pavona, Pocillopora_spp, Porites_spp) %>% 
+  pivot_wider(names_from = Time_point, values_from = c(Acropora_spp, Montipora_spp, Pavona, Pocillopora_spp, Porites_spp), values_fill = 0) %>% 
+  mutate(Change_MontipHard12 = Montipora_spp_12-Montipora_spp_0,
+         Change_AcropHard12 = Acropora_spp_12-Acropora_spp_0,
+         Change_PocHard12 = Pocillopora_spp_12-Pocillopora_spp_0,
+         Change_PavonaHard12 = Pavona_12-Pavona_0,
+         Change_PoritesHard12 = Porites_spp_12-Porites_spp_0
+         
+
+         ) -> coral_change
+```
+
+# Make ymatrix
+
+```{r}
+coral_change %>% 
+  mutate(Rows = paste0(Block_Plot, Herb_TRT, Nutrient_Trt, Disturbance_Trt)) %>% 
+  select(Rows, Change_MontipHard12, Change_AcropHard12, Change_PocHard12, Change_PavonaHard12, Change_PoritesHard12) -> ymatrix
+```
+
+
+# Make xmatrix
+
+```{r}
+coral_change %>% 
+  mutate(Rows = paste0(Block_Plot, Herb_TRT, Nutrient_Trt, Disturbance_Trt)) %>% 
+  select(Rows, Block, Plot, Block_Plot, Herb_TRT, Nutrient_Trt, Disturbance_Trt) -> xmatrix
+```
+
+
+# Save as csvs
+
+```{r}
+write_csv(xmatrix, here("generated_data/rechargexdata.csv"))
+write_csv(ymatrix, here("generated_data/rechargeydata.csv"))
+
+```
+
+
