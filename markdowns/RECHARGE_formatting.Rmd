@@ -124,7 +124,7 @@ percHard %>%
 sum_cover %>% 
   select(Time_point, Block, Plot, Block_Plot, Herb_TRT, Nutrient_Trt, Disturbance_Trt, Montipora_spp, Plot_sum) %>% 
   pivot_wider(names_from = Time_point, values_from = c(Montipora_spp, Plot_sum), values_fill = 0) %>% 
-  mutate(Percent_initial = (Montipora_spp_0/Plot_sum_0)*100) -> montip_poisson
+  mutate(Percent_initial = Montipora_spp_0/Plot_sum_0) -> montip_poisson
   
 ```
 
