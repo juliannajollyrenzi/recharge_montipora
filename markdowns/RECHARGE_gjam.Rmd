@@ -1,0 +1,11 @@
+---
+title: "RECHARGE GJAM style"
+output: html_document
+date: "2023-11-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Format RECHARGE data for GJAM analysis for kicks
